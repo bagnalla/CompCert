@@ -478,6 +478,11 @@ let preg_to_dwarf = function
 
 (* Branch relaxation *)
 
+(** Maximum range of conditional branches, in number of instructions. *)
+let max_cond_branch_range = 262144
+
+let inline_asm_size = max_cond_branch_range + 1
+
 (** Number of actual machine code instructions corresponding to a
     given Asm.instruction. Derived from [print_instruction] in
     TargetPrinter.ml. *)
@@ -492,9 +497,8 @@ let instr_size = function
   | Ploadsymbol _ -> 2
   | Pbtbl (_, tbl) -> 3 + List.length tbl
   | Pbuiltin(EF_inline_asm (txt, sg, clob), args, res) ->
-     (* Conservatively count number of lines. Possibly over-estimating
-        if, e.g., any of them are labels. *)
-     List.length @@ String.split_on_char '\n' @@ camlstring_of_coqstring txt
+     (* Size is unknown until assembly; force relaxation across it. *)
+     inline_asm_size
   | Pbuiltin (EF_debug _, _args, _res) -> 0
   | Pbuiltin (EF_annot _, _args, _res) -> 0
   | Pbuiltin(_, _args, _res) -> assert false
@@ -561,7 +565,7 @@ let relax_branch br_instr : unit =
   branch_changed := true
 
 let branch_range = function
-  | Pbc _ | Pcbnz _ | Pcbz _ -> Some 262144
+  | Pbc _ | Pcbnz _ | Pcbz _ -> Some max_cond_branch_range
   | Ptbnz _ | Ptbz _ -> Some 8192
   | _ -> None
 
