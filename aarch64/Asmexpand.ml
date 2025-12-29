@@ -490,12 +490,14 @@ let instr_size = function
      let d = camlint_of_coqint (Floats.Float32.to_bits f) in
      if is_immediate_float32 d then 1 else 2
   | Ploadsymbol _ -> 2
-  | Pbtbl (_, tbl) -> 4 + List.length tbl
+  | Pbtbl (_, tbl) -> 3 + List.length tbl
   | Pbuiltin(EF_inline_asm (txt, sg, clob), args, res) ->
      (* Conservatively count number of lines. Possibly over-estimating
         if, e.g., any of them are labels. *)
      List.length @@ String.split_on_char '\n' @@ camlstring_of_coqstring txt
-  | Pbuiltin(_, args, res) -> assert false
+  | Pbuiltin (EF_debug _, _args, _res) -> 0
+  | Pbuiltin (EF_annot _, _args, _res) -> 0
+  | Pbuiltin(_, _args, _res) -> assert false
   | Pallocframe _ -> assert false
   | Pfreeframe _ -> assert false
   | Pcvtx2w _ -> assert false
