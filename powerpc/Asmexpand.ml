@@ -989,6 +989,7 @@ let instr_fall_through = function
   | Pblr -> false
   | _ -> true
 
+(* Mark labels that are part of a relaxed sequence to avoid extra padding. *)
 let relax_tbl code =
   let rec aux tbl = function
     | (Pbf (_, lbl) | Pbt (_, lbl)) :: Pb _ :: Plabel lbl' :: rest
@@ -1009,6 +1010,7 @@ let is_relax_label relax_tbl lbl =
   | Some true -> true
   | _ -> false
 
+(* Respect alignment flags while skipping relax labels. *)
 let align_before ~fallthrough ~relax_tbl ~pos = function
   | Pbf _ | Pbt _ ->
       let align = !Clflags.option_faligncondbranchs in

@@ -16,10 +16,15 @@ open Maps
 module type TARGET = sig
   type instruction
 
+  (* Conservative size estimate for layout. *)
   val instr_size : instruction -> int
+  (* Recognize label instructions for position mapping. *)
   val is_label : instruction -> label option
+  (* True when control can flow to the next instruction. *)
   val instr_fall_through : instruction -> bool
+  (* Mark relaxation labels to guide alignment decisions. *)
   val relax_tbl : instruction list -> bool PTree.t
+  (* Apply alignment before this instruction and return the new position. *)
   val align_before :
     fallthrough:bool -> relax_tbl:bool PTree.t -> pos:int -> instruction -> int
 
@@ -27,6 +32,7 @@ module type TARGET = sig
   val branch_info :
     instruction -> (label * int * (label -> instruction list)) option
 
+  (* Provide fresh labels for relaxation sequences. *)
   val new_label : unit -> label
 end
 

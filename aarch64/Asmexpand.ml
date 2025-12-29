@@ -506,6 +506,7 @@ let instr_fall_through = function
   | Pb _ | Pbs _ | Pbr _ | Pret _ -> false
   | _ -> true
 
+(* No alignment-sensitive layout for AArch64 relaxation. *)
 let relax_tbl _ = Maps.PTree.empty
 
 let align_before ~fallthrough:_ ~relax_tbl:_ ~pos _i = pos
