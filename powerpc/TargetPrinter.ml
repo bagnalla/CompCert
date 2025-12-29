@@ -22,6 +22,21 @@ open Asm
 open PrintAsmaux
 open AisAnnot
 
+(* Estimate the size of an Asm instruction encoding, in number of actual
+   PowerPC instructions.  We can over-approximate. *)
+let instr_size = function
+  | Pbf _ -> 2
+  | Pbt _ -> 2
+  | Pbtbl _ -> 5
+  | Pldi _ -> 2
+  | Plfi _ -> 2
+  | Plfis _ -> 2
+  | Plabel _ -> 0
+  | Pbuiltin((EF_annot _ | EF_debug _), _, _) -> 0
+  | Pbuiltin(_, _, _) -> 3
+  | Pcfi_adjust _ | Pcfi_rel_offset _ -> 0
+  | _ -> 1
+
 (* Recognition of target ABI and asm syntax *)
 
 module type SYSTEM =
@@ -381,17 +396,9 @@ module Target (System : SYSTEM):TARGET =
           assert false
       in leftmost_one 0 0x8000_0000_0000_0000L
 
-    (* Determine if the displacement of a conditional branch fits the short form *)
-
-    let short_cond_branch tbl pc lbl_dest =
-      match PTree.get lbl_dest tbl with
-      | None -> assert false
-      | Some pc_dest ->
-          let disp = pc_dest - pc in -0x2000 <= disp && disp < 0x2000
-
     (* Printing of instructions *)
 
-    let print_instruction oc tbl pc fallthrough = function
+    let print_instruction oc _tbl _pc fallthrough relax_tbl = function
       | Padd(r1, r2, r3) | Padd64(r1, r2, r3) ->
           fprintf oc "	add	%a, %a, %a\n" ireg r1 ireg r2 ireg r3
       | Paddc(r1, r2, r3) ->
@@ -435,14 +442,7 @@ module Target (System : SYSTEM):TARGET =
       | Pbf(bit, lbl) ->
           if !Clflags.option_faligncondbranchs > 0 then
             fprintf oc "	.balign	%d\n" !Clflags.option_faligncondbranchs;
-          if short_cond_branch tbl pc lbl then
-            fprintf oc "	bf	%a, %a\n" crbit bit label (transl_label lbl)
-          else begin
-            let next = new_label() in
-            fprintf oc "	bt	%a, %a\n" crbit bit label next;
-            fprintf oc "	b	%a\n" label (transl_label lbl);
-            fprintf oc "%a:\n" label next
-          end
+          fprintf oc "	bf	%a, %a\n" crbit bit label (transl_label lbl)
       | Pbl(s, sg) ->
           fprintf oc "	bl	%a\n" symbol s
       | Pbs(s, sg) ->
@@ -452,14 +452,7 @@ module Target (System : SYSTEM):TARGET =
       | Pbt(bit, lbl) ->
           if !Clflags.option_faligncondbranchs > 0 then
             fprintf oc "	.balign	%d\n" !Clflags.option_faligncondbranchs;
-          if short_cond_branch tbl pc lbl then
-            fprintf oc "	bt	%a, %a\n" crbit bit label (transl_label lbl)
-          else begin
-            let next = new_label() in
-            fprintf oc "	bf	%a, %a\n" crbit bit label next;
-            fprintf oc "	b	%a\n" label (transl_label lbl);
-            fprintf oc "%a:\n" label next
-          end
+          fprintf oc "	bt	%a, %a\n" crbit bit label (transl_label lbl)
       | Pbtbl(r, tbl) ->
           let lbl = new_label() in
           fprintf oc "%s begin pseudoinstr btbl(%a)\n" comment ireg r;
@@ -827,7 +820,14 @@ module Target (System : SYSTEM):TARGET =
       | Pxoris64(r1, r2, n) ->
           fprintf oc "	xoris	%a, %a, %Ld\n" ireg r1 ireg r2 (camlint64_of_coqint n)
       | Plabel lbl ->
-          if (not fallthrough) && !Clflags.option_falignbranchtargets > 0 then
+          let is_relax_lbl =
+            match PTree.get lbl relax_tbl with
+            | Some true -> true
+            | _ -> false
+          in
+          if (not fallthrough)
+          && !Clflags.option_falignbranchtargets > 0
+          && not is_relax_lbl then
             fprintf oc "	.balign	%d\n" !Clflags.option_falignbranchtargets;
           fprintf oc "%a:\n" label (transl_label lbl)
       | Pbuiltin(ef, args, res) ->
@@ -866,22 +866,6 @@ module Target (System : SYSTEM):TARGET =
       | Pblr -> false
       | _ -> true
 
-    (* Estimate the size of an Asm instruction encoding, in number of actual
-       PowerPC instructions.  We can over-approximate. *)
-
-    let instr_size = function
-      | Pbf(bit, lbl) -> 2
-      | Pbt(bit, lbl) -> 2
-      | Pbtbl(r, tbl) -> 5
-      | Pldi (r1,c) -> 2
-      | Plfi(r1, c) -> 2
-      | Plfis(r1, c) -> 2
-      | Plabel lbl -> 0
-      | Pbuiltin((EF_annot _ | EF_debug _), args, res) -> 0
-      | Pbuiltin(ef, args, res) -> 3
-      | Pcfi_adjust _ | Pcfi_rel_offset _ -> 0
-      | _ -> 1
-
    (* Build a table label -> estimated position in generated code.
       Used to predict if relative conditional branches can use the short form. *)
 
@@ -892,11 +876,22 @@ module Target (System : SYSTEM):TARGET =
 
     (* Emit a sequence of instructions *)
 
+    let relaxed_labels code =
+      let rec aux tbl = function
+        | (Pbf (_, lbl) | Pbt (_, lbl)) :: Pb _ :: Plabel lbl' :: rest
+          when lbl = lbl' ->
+            aux (PTree.set lbl true tbl) rest
+        | _ :: rest -> aux tbl rest
+        | [] -> tbl
+      in
+      aux PTree.empty code
+
     let print_instructions oc fn =
-      let rec aux  oc tbl pc fallthrough = function
+      let relax_tbl = relaxed_labels fn.fn_code in
+      let rec aux oc tbl pc fallthrough = function
       | [] -> ()
       | i :: c ->
-          print_instruction oc tbl pc fallthrough i;
+          print_instruction oc tbl pc fallthrough relax_tbl i;
          aux oc tbl (pc + instr_size i) (instr_fall_through i) c in
       aux oc (label_positions PTree.empty 0 fn.fn_code) 0 true fn.fn_code
 

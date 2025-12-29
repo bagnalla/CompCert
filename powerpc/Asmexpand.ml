@@ -18,6 +18,8 @@ open! Integers
 open AST
 open Asm
 open Asmexpandaux
+module PTree = Maps.PTree
+module TP = TargetPrinter (* for instr_size *)
 
 exception Error of string
 
@@ -968,12 +970,92 @@ let preg_to_dwarf = function
    | FR r -> float_reg_to_dwarf r
    | _ -> assert false
 
+(* Branch relaxation *)
+
+let negate_cond_branch new_tgt = function
+  | Pbf (bit, _) -> Pbt (bit, new_tgt)
+  | Pbt (bit, _) -> Pbf (bit, new_tgt)
+  | _ -> raise (Error "negate_cond_branch: expected conditional branch")
+
+let tgt_of_branch = function
+  | Pbf (_, tgt) -> tgt
+  | Pbt (_, tgt) -> tgt
+  | _ -> raise (Error "tgt_of_branch: expected conditional branch")
+
+let instr_fall_through = function
+  | Pb _ -> false
+  | Pbctr _ -> false
+  | Pbs _ -> false
+  | Pblr -> false
+  | _ -> true
+
+let relax_tbl code =
+  let rec aux tbl = function
+    | (Pbf (_, lbl) | Pbt (_, lbl)) :: Pb _ :: Plabel lbl' :: rest
+      when lbl = lbl' ->
+        aux (PTree.set lbl true tbl) rest
+    | _ :: rest -> aux tbl rest
+    | [] -> tbl
+  in
+  aux PTree.empty code
+
+let align_pos_bytes pos align =
+  let pos_bytes = pos * 4 in
+  let aligned = (pos_bytes + align - 1) land (-align) in
+  aligned / 4
+
+let is_relax_label relax_tbl lbl =
+  match PTree.get lbl relax_tbl with
+  | Some true -> true
+  | _ -> false
+
+let align_before ~fallthrough ~relax_tbl ~pos = function
+  | Pbf _ | Pbt _ ->
+      let align = !Clflags.option_faligncondbranchs in
+      if align > 0 then align_pos_bytes pos align else pos
+  | Plabel lbl ->
+      let align = !Clflags.option_falignbranchtargets in
+      if (not fallthrough) && align > 0 && not (is_relax_label relax_tbl lbl)
+      then align_pos_bytes pos align
+      else pos
+  | _ -> pos
+
+module PPCBranchRelax = BranchRelax.Make(struct
+  type instruction = Asm.instruction
+
+  let instr_size = TP.instr_size
+
+  let is_label = function
+    | Plabel lbl -> Some lbl
+    | _ -> None
+
+  let instr_fall_through = instr_fall_through
+
+  let relax_tbl = relax_tbl
+
+  let align_before = align_before
+
+  let branch_info instr =
+    match instr with
+    | Pbf _ | Pbt _ ->
+        let tgt = tgt_of_branch instr in
+        Some (tgt, 0x2000,
+              fun lbl ->
+                [negate_cond_branch lbl instr; Pb tgt; Plabel lbl])
+    | _ -> None
+
+  let new_label = new_label
+end)
 
 let expand_function id fn =
   try
     set_current_function fn;
     expand id 1 preg_to_dwarf expand_instruction fn.fn_code;
-    Errors.OK (get_current_function ())
+    let expanded_fn = get_current_function () in
+    set_current_function expanded_fn;
+    let relaxed_code =
+      PPCBranchRelax.relax_fixpoint expanded_fn.fn_code in
+    Errors.OK {expanded_fn with fn_code = relaxed_code}
   with Error s ->
     Errors.Error (Errors.msg (coqstring_of_camlstring s))
 
