@@ -194,6 +194,8 @@ module IntPairs = Hashtbl.Make(struct
 (* The global state of the algorithm *)
 
 type graph = {
+  (* Whether to enable register coalescing *)
+  enable_coalescing: bool;
   (* Machine registers available for allocation *)
   preferred_registers: mreg array array;
   remaining_registers: mreg array array;
@@ -261,13 +263,14 @@ let rec remove_reserved = function
 
 (* Initialize and return an empty graph *)
 
-let init costs =
+let init ?(coalesce=true) costs =
   let aregs = allocatable_registers () in
   let int_preferred_regs = remove_reserved aregs.preferred_int_regs
   and float_preferred_regs = remove_reserved aregs.preferred_float_regs
   and int_remaining_regs = remove_reserved aregs.remaining_int_regs
   and float_remaining_regs = remove_reserved aregs.remaining_float_regs in
   {
+    enable_coalescing = coalesce;
     preferred_registers =
       [| Array.of_list int_preferred_regs;
          Array.of_list float_preferred_regs;
@@ -401,13 +404,13 @@ let recordExtraPref2 n1 n2 =
 
 let addMovePref g n1 n2 =
   match n1.color, n2.color with
-  | None, None ->
+  | None, None when g.enable_coalescing ->
       if n1.regclass = n2.regclass
       then recordMove g n1 n2
       else recordExtraPref2 n1 n2
-  | Some (R mr1), None ->
+  | Some (R mr1), None when g.enable_coalescing ->
       if List.mem mr1 g.allocatable_registers then recordMove g n1 n2
-  | None, Some (R mr2) ->
+  | None, Some (R mr2) when g.enable_coalescing ->
       if List.mem mr2 g.allocatable_registers then recordMove g n1 n2
   | Some (S _), None ->
       recordExtraPref n2 n1
@@ -918,8 +921,9 @@ let location_of_var g v =
 let add_interf g v1 v2 =
   let n1 = nodeOfVar g v1 in let n2 = nodeOfVar g v2 in addEdge g n1 n2
 
-let add_pref g v1 v2 =
+let add_pref g v1 v2 =  
   let n1 = nodeOfVar g v1 in let n2 = nodeOfVar g v2 in addMovePref g n1 n2
+
 
 let coloring g =
   initialNodePartition g;

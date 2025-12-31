@@ -735,7 +735,8 @@ let rec add_interfs_block g blk live =
 
 let find_coloring f liveness =
   (*type_function f;  (* for debugging *)*)
-  let g = IRC.init (spill_costs f) in
+  let g = IRC.init ~coalesce:(List.length (PTree.elements f.fn_code) < 50000)
+            (spill_costs f) in
   PTree.fold
     (fun () pc blk -> ignore (add_interfs_block g blk (PMap.get pc liveness)))
     f.fn_code ();

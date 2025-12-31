@@ -27,7 +27,7 @@ type var_stats = {
 
 (* Create an empty graph.  The given function associates statistics to
    every variable. *)
-val init: (reg -> var_stats) -> graph
+val init: ?coalesce:bool -> (reg -> var_stats) -> graph
 
 (* Add an interference between two variables. *)
 val add_interf: graph -> var -> var -> unit
